@@ -1,50 +1,63 @@
-from google.adk.agents import LoopAgent, LlmAgent
-from google.genai import types
+from google.adk.agents import LlmAgent, LoopAgent, SequentialAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+import asyncio
 
-def search() -> str:
-
-    return""
 
 moderator = LlmAgent(
     model='gemini-2.5-flash',
     name='root_agent',
     description='The moderator for this debate.',
-    instruction="""You are the moderator for a debate. You must present the topic to the two 
-    debators and act professionally in moderating the discussion. You should leave the majority of 
-    the speaking to the debators and only speak to progress the debate forward such as allowing 
-    each debator to speak and present their claims and prompt them to do so.""",
-    generate_content_config=types.GenerateContentConfig(
-        temperature=0.5,
-        max_output_tokens=100,
-    )
+    instruction="""You control the debate.
+    Current transcript: {transcript}
+    Last checked response: {last_checked}
+    Decide: Continue (say whose turn) OR End debate and give summary + winner.
+    Keep responses neutral and short.""",
 )
 
 debator1 = LlmAgent(
     model='gemini-2.5-flash',
     name='positive_debator',
     description='The debator supporting the topic presented.',
-    instruction='',
-    tools=[search],
+    instruction="""You are Debater Pro. Always stay in character.
+    Topic: {topic}
+    Previous transcript: {transcript}
+    Respond concisely (150-250 words).""",
 )
 
 debator2 = LlmAgent(
     model='gemini-2.5-flash',
     name='negative_debator',
     description='The debator opposing the topic presented.',
-    instruction='',
-    tools=[search],
+    instruction="""You are Debater Con. Always stay in character.
+    Topic: {topic}
+    Previous transcript: {transcript}
+    Respond concisely (150-250 words).""",
 )
 
 factChecker = LlmAgent(
     model='gemini-2.5-flash',
     name='fact_checker',
     description='Checks any factual information presented by the two presentors.',
-    instruction='',
-    tools=[search],
+    instruction="""Review the LAST response only.
+    List every factual claim and mark as:
+    - ✅ Accurate
+    - ⚠️ Partially accurate (explain)
+    - ❌ False (correct it with source if possible)
+    Give an overall accuracy score 1-10.
+    Output in clear bullet format.""",
 )
 
-debatePipeline = LoopAgent(
+pipeline = SequentialAgent(
+    name='debate_pipeline',
+    description='',
+    sub_agents=[]
+)
+
+debateLoop = LoopAgent(
     name='debate_loop',
     description='Loops through the debate.',
-    sub_agents=[moderator, debator1, factChecker, moderator, debator2, factChecker],
+    sub_agents=[],
 )
+
+
