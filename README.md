@@ -4,8 +4,8 @@ This project facilitates a multi-agent debate about something.
 
 ## Running the program
 
-Ensure a .env file is setup containing the following information:<br>
-<code>GOOGLE_GENAI_USE_VERTEXAI=TRUE<br>
+Ensure a .env file is setup containing the following information:<br><code>
+GOOGLE_GENAI_USE_VERTEXAI=TRUE<br>
 GOOGLE_CLOUD_PROJECT=   # Your project id<br>
 GOOGLE_CLOUD_LOCATION=  # The region you wish to host the project in<br>
 GOOGLE_API_KEY=         # Your Vertex/Gemini API key</code>
