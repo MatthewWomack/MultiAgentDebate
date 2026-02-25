@@ -5,10 +5,10 @@ This project facilitates a multi-agent debate about something.
 ## Running the program
 
 Ensure a .env file is setup containing the following information:
-`GOOGLE_GENAI_USE_VERTEXAI=TRUE
-GOOGLE_CLOUD_PROJECT=   # Your project id
-GOOGLE_CLOUD_LOCATION=  # The region you wish to host the project in
-GOOGLE_API_KEY=         # Your Vertex/Gemini API key`
+`GOOGLE_GENAI_USE_VERTEXAI=TRUE`
+`GOOGLE_CLOUD_PROJECT=   # Your project id`
+`GOOGLE_CLOUD_LOCATION=  # The region you wish to host the project in`
+`GOOGLE_API_KEY=         # Your Vertex/Gemini API key`
 
 Command line:
 
