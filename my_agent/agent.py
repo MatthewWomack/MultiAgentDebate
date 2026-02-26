@@ -1,3 +1,12 @@
+'''TO DO
+1) Add human-in-the-loop interaction before the start of each round
+2) Change endDebateTool to be cleaner
+3) Store past debates and be able to access them
+
+Optional: Add voices
+
+'''
+
 from google.adk.agents import LlmAgent, LoopAgent, SequentialAgent, callback_context
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
