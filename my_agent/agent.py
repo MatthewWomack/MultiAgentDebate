@@ -5,7 +5,7 @@ from google.genai import types
 from google.adk.tools import BaseTool
 from typing import Optional
 
-TOPIC = "Is it gay to have a clean room as a guy?" # CHANGE BEFORE DUE DATE
+TOPIC = "Does pineapple belong on pizza?" # CHANGE BEFORE DUE DATE
 
 class endDebateTool(BaseTool):
     name = "end_debate"
@@ -25,13 +25,13 @@ moderator = LlmAgent(
 
     Latest fact-checked round:{last_checked}
 
-    Topic: {topic}
+    Topic:{topic}
 
     Your tasks:
     1. Introduce the debate if the transcript is empty. Briefly (2-3 sentences) introduce the 
     topic and then begin the debate.
     2. Decide if the round is valid (no major off-topic/toxicity/stalling).
-    3. If the debate should continue → output "NEXT: Pro" or "NEXT: Con"
+    3. If the debate should continue output "NEXT: Pro" or "NEXT: Con"
     4. If it's time to end (e.g., clear winner, both sides exhausted, enough rounds, stalemate, 
     etc.) Call 'endDebateTool' with a 1-sentence reason. Output the message and call the tool.
 
@@ -77,7 +77,7 @@ factChecker = LlmAgent(
     )
 )
 
-pro_round= SequentialAgent(
+debate_round= SequentialAgent(
     name="Debate_Round",
     sub_agents=[moderator, current_debater, factChecker]
 )
@@ -86,13 +86,13 @@ root_agent = LoopAgent(
     name='debate_loop',
     max_iterations=10,
     description='Loops through alternating debate rounds.',
-    sub_agents=[pro_round] # Start with the pro round
+    sub_agents=[debate_round] # Start with the pro round
 )
 
 def ensure_defaults(callback_context: callback_context.CallbackContext) -> Optional[types.Content]:
     state = callback_context.state
     state.setdefault("topic", TOPIC)
-    state.setdefault("current_speaker", "Pro")
+    state.setdefault("current_speaker", "")
     state.setdefault("transcript", "")
     state.setdefault("last_response", "")
     state.setdefault("last_checked", "")
