@@ -11,13 +11,16 @@ from google.adk.agents import LlmAgent, LoopAgent, SequentialAgent, callback_con
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
-from google.adk.tools import BaseTool
+from google.adk.tools import BaseTool, FunctionTool
 from typing import Optional
 
+APP_NAME = "MultiAgentDebate"
+USER_ID = "testing"
+SESSION_ID = "debate1"
+GEMINI_2_FLASH = "gemini-2.0-flash"
 TOPIC = "Does pineapple belong on pizza?" # CHANGE BEFORE DUE DATE
 
 class endDebateTool(BaseTool):
-    name = "end_debate"
     description = "Call this ONLY when you are certain the debate should end now. Provide a short reason."
 
     async def run(self, reason: str, ctx):  # ctx is passed automatically
@@ -52,8 +55,6 @@ moderator = LlmAgent(
     )
 )
 
-from google.adk.tools import FunctionTool
-
 def get_human_argument(argument: str):
     """
     Submits the human's response to the debate.
@@ -71,7 +72,9 @@ current_debater = LlmAgent(
     name="Current_Debater",
     model='gemini-2.0-flash', # Ensure you are using a stable 2.0 version
     instruction="""You are representing: {current_speaker}.
-    
+    If Pro: argue FOR the topic passionately and logically.
+    If Con: argue AGAINST the topic passionately and logically.
+    Topic: {topic}
     CRITICAL:
     - If MODE is 'AI_VS_HUMAN' and speaker is 'Con', call 'get_human_argument'.
     - Otherwise (AI_VS_AI mode), generate a 150-word argument for {topic}.""",
@@ -114,7 +117,7 @@ root_agent = LoopAgent(
 def ensure_defaults(callback_context: callback_context.CallbackContext) -> Optional[types.Content]:
     state = callback_context.state
     state.setdefault("topic", TOPIC)
-    state.setdefault("current_speaker", "Pro") 
+    state.setdefault("current_speaker", "") 
     state.setdefault("transcript", "")
     state.setdefault("mode", "AI_VS_HUMAN") 
     state.setdefault("last_response", "")
@@ -123,31 +126,8 @@ def ensure_defaults(callback_context: callback_context.CallbackContext) -> Optio
 
 root_agent.before_agent_callback = ensure_defaults
 
-def alternateSpeaker(context):
-    current= context.session.state.get("current_speaker", "Pro")
-
-    next_speaker= "Con" if current == "Pro" else "Pro"
-
-    context.session.state["current_speaker"] = next_speaker
-
-    last_resp = context.session.state.get("last_response", "")
-    last_check = context.session.state.get("last_checked", "")
-    mod_dec = context.session.state.get("mod_decision", "")
-
-    if last_resp:
-        context.session.state["transcript"] += f"\n\n{current}: {last_resp}\nFact-check: {last_check}\nModerator: {mod_dec}"
-
-    return None
-
-root_agent.after_agent_callback= alternateSpeaker
-
 async def debate():
     service = InMemorySessionService()
-    session = await service.create_session(
-        app_name="MultiAgentDebate",
-        user_id="user1",
-        session_id="debate1"
-    )
 
     runner = Runner(agent=root_agent, session_service=service)
     message = types.Content(
@@ -155,12 +135,6 @@ async def debate():
         parts=[types.Part.from_text(text="Begin the debate now.")]
     )
     runner.run(user_id="user1", session_id="debate1", new_message=message)
-
-    updated_session = service.get_session(
-        app_name="MultiAgentDebate",
-        user_id="user1",
-        session_id="debate1"
-    )
 
 if __name__ == "__main__":
     import asyncio
