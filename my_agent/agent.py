@@ -16,8 +16,8 @@ from typing import Optional
 
 APP_NAME = "MultiAgentDebate"
 USER_ID = "testing"
+MODEL = 'gemini-2.5-flash'
 SESSION_ID = "debate1"
-GEMINI_2_FLASH = "gemini-2.0-flash"
 TOPIC = "Does pineapple belong on pizza?" # CHANGE BEFORE DUE DATE
 
 class endDebateTool(BaseTool):
@@ -28,11 +28,10 @@ class endDebateTool(BaseTool):
         return f"Debate ended early: {reason}"
 
 moderator = LlmAgent(
-    model='gemini-2.5-flash',
+    model=MODEL,
     name='Moderator',
     description='The moderator for this debate.',
-    instruction="""You are a strict, neutral moderator who is moderating a 
-    debate in front of a crowd.
+    instruction="""You are a strict, neutral moderator who is moderating a debate.
     Current full transcript:{transcript}
 
     Latest fact-checked round:{last_checked}
@@ -45,7 +44,7 @@ moderator = LlmAgent(
     2. Decide if the round is valid (no major off-topic/toxicity/stalling).
     3. If the debate should continue output "NEXT: Pro" or "NEXT: Con"
     4. If it's time to end (e.g., clear winner, both sides exhausted, enough rounds, stalemate, 
-    etc.) Call 'endDebateTool' with a 1-sentence reason. Output the message and call the tool.
+    etc.) Call 'endDebateTool' with a 1-sentence reason.
 
     Output your decision OR tool call — nothing else.""",
     tools=[endDebateTool],
@@ -63,14 +62,14 @@ def get_human_argument(argument: str):
     """
     return argument
 
-def is_human_turn(ctx, *args, **kwargs) -> bool:
+def is_human_turn(ctx) -> bool:
     state = ctx.session.state
     # If mode is HUMAN and speaker is 'Con', ADK Web will pop up the input box
     return state.get("mode") == "AI_VS_HUMAN" and state.get("current_speaker") == "Con"
 
 current_debater = LlmAgent(
     name="Current_Debater",
-    model='gemini-2.0-flash', # Ensure you are using a stable 2.0 version
+    model=MODEL,
     instruction="""You are representing: {current_speaker}.
     If Pro: argue FOR the topic passionately and logically.
     If Con: argue AGAINST the topic passionately and logically.
@@ -86,7 +85,7 @@ current_debater = LlmAgent(
 )
 
 factChecker = LlmAgent(
-    model='gemini-2.5-flash',
+    model=MODEL,
     name='fact_checker',
     description='You fact check every single claim rigorously.',
     instruction="""Review the LAST response only.
