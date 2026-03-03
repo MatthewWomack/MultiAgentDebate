@@ -6,23 +6,24 @@
 Optional: Add voices
 
 '''
-
+from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents import LlmAgent, LoopAgent, SequentialAgent, callback_context
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
-from google.adk.tools import BaseTool
+from google.adk.tools import FunctionTool
 from typing import Optional
 
+APP_NAME = "MultiAgentDebate"
+USER_ID = "testing"
+SESSION_ID = "debate1"
+GEMINI_2_FLASH = "gemini-2.0-flash"
 TOPIC = "Does pineapple belong on pizza?" # CHANGE BEFORE DUE DATE
 
-class endDebateTool(BaseTool):
-    name = "end_debate"
+async def endDebateTool(reason: str, ctx: InvocationContext) -> str:
     description = "Call this ONLY when you are certain the debate should end now. Provide a short reason."
-
-    async def run(self, reason: str, ctx):  # ctx is passed automatically
-        ctx.event_actions.escalate = True  # This breaks the LoopAgent immediately
-        return f"Debate ended early: {reason}"
+    ctx.end_invocation=True
+    return f"Debate ended early: {reason}"
 
 moderator = LlmAgent(
     model='gemini-2.5-flash',
@@ -42,10 +43,10 @@ moderator = LlmAgent(
     2. Decide if the round is valid (no major off-topic/toxicity/stalling).
     3. If the debate should continue output "NEXT: Pro" or "NEXT: Con"
     4. If it's time to end (e.g., clear winner, both sides exhausted, enough rounds, stalemate, 
-    etc.) Call 'endDebateTool' with a 1-sentence reason. Output the message and call the tool.
+    etc.) Call 'endDebateTool' with a 1-sentence reason. Do not output any message.
 
     Output your decision OR tool call — nothing else.""",
-    tools=[endDebateTool],
+    tools=[FunctionTool(func=endDebateTool)],
     output_key="mod_decision",
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2
@@ -56,13 +57,13 @@ current_debater = LlmAgent(
     name="Current_Debater",
     model='gemini-2.5-flash',
     instruction="""You are currently: {current_speaker}
-        - If Pro: argue FOR the topic passionately and logically.
-        - If Con: argue AGAINST the topic passionately and logically.
+        If Pro: argue FOR the topic passionately and logically.
+        If Con: argue AGAINST the topic passionately and logically.
         Topic: {topic}
         Transcript so far: {transcript}
         Opponent's last checked response: {last_checked}
 
-        Respond in 150–200 words. Stay in character. No moderation or fact-checking.""",
+        Respond in 10 words. No moderation or fact-checking.""",
     output_key="last_response",
     generate_content_config=types.GenerateContentConfig(
         temperature=1.5
@@ -75,9 +76,9 @@ factChecker = LlmAgent(
     description='You fact check every single claim rigorously.',
     instruction="""Review the LAST response only.
     List every factual claim and mark as:
-    - ✅ Accurate
-    - ⚠️ Partially accurate (explain BRIEFLY)
-    - ❌ False (correct it with source if possible)
+    ✅ Accurate
+    ⚠️ Partially accurate (explain BRIEFLY)
+    ❌ False (correct it with source if possible)
     Give an overall accuracy score 1-10.
     Output in clear bullet format.""",
     output_key="last_checked",
@@ -125,14 +126,14 @@ def alternateSpeaker(context):
 
     return None
 
-root_agent.after_agent_callback= alternateSpeaker
+#root_agent.after_agent_callback= alternateSpeaker
 
 async def debate():
     service = InMemorySessionService()
     session = await service.create_session(
-        app_name="MultiAgentDebate",
-        user_id="user1",
-        session_id="debate1"
+        app_name=APP_NAME,
+        user_id=USER_ID,
+        session_id=SESSION_ID
     )
 
     runner = Runner(agent=root_agent, session_service=service)
@@ -141,12 +142,6 @@ async def debate():
         parts=[types.Part.from_text(text="Begin the debate now.")]
     )
     runner.run(user_id="user1", session_id="debate1", new_message=message)
-
-    updated_session = service.get_session(
-        app_name="MultiAgentDebate",
-        user_id="user1",
-        session_id="debate1"
-    )
 
 if __name__ == "__main__":
     import asyncio
