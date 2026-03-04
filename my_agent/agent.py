@@ -12,7 +12,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 load_dotenv()
 
-
 # Constants
 APP_NAME = "MultiAgentDebate"
 USER_ID = "12345"
@@ -37,16 +36,18 @@ class DebateAgent(BaseAgent):
         self,
         name: str,
         moderator: LlmAgent,
-        debater: LlmAgent,
+        pro: LlmAgent,
+        con: LlmAgent,
         fact_checker: LlmAgent,
     ):
         moderator= moderator
-        debater= debater
+        pro=pro
+        con=con
         fact_checker= fact_checker
 
         super().__init__(
             name=name,
-            sub_agents=[moderator, debater, fact_checker],
+            sub_agents=[moderator, pro, con, fact_checker],
         )
 
     @override
@@ -73,7 +74,7 @@ class DebateAgent(BaseAgent):
         flag = False
         while iterations < max_iterations and not flag:
             iterations += 1
-            logger.info(f"[{self.name}] -- Round {iterations} --")
+            logger.info(f"\n\n[{self.name}] --- Round {iterations} ---")
 
             # Moderator
             logger.info(f"[{self.name}] Running Moderator...")
@@ -81,46 +82,47 @@ class DebateAgent(BaseAgent):
                 yield event
 
             mod_decision = state.get("mod_decision", "").strip()
-            logger.info(f"Moderator decided: {mod_decision!r}")
+            print(f"Moderator: {mod_decision!r}")
 
             if mod_decision.upper().startswith("END:"):
                 logger.info(f"[{self.name}] Debate ended: {mod_decision}")
                 flag = True
-                continue
 
-            if not mod_decision.upper().startswith("NEXT:"):
-                logger.warning(f"Invalid decision, forcing continuation")
-                # default alternation
-                current = state.get("current_speaker", "Pro")
-                next_speaker = "Con" if current == "Pro" else "Pro"
-            else:
-                next_speaker = mod_decision.split(":", 1)[1].strip().title()
-            
-            state["current_speaker"] = next_speaker
+            if flag == False:
+                if iterations > 1 and not mod_decision.upper().startswith("NEXT:"):
+                    # default alternation
+                    current = state.get("current_speaker", "Pro")
+                    next_speaker = "Con" if current == "Pro" else "Pro"
+                else:
+                    next_speaker = mod_decision.split(":", 1)[1].strip().title()
+                
+                state["current_speaker"] = next_speaker
 
-            # For adk web: always use AI for now
-            logger.info(f"[{self.name}] Running Debater as {next_speaker} (auto AI mode)")
-            async for event in debater.run_async(ctx):
-                yield event
+                # Run debater
+                logger.info(f"[{self.name}] Running Debater as {next_speaker}")
+                debater = pro if {next_speaker}  == "Pro" else con
+                async for event in debater.run_async(ctx):
+                    yield event
 
-            # Fact check
-            logger.info(f"[{self.name}] Running Fact Checker...")
-            async for event in fact_checker.run_async(ctx):
-                yield event
+                # Fact check
+                logger.info(f"[{self.name}] Running Fact Checker...")
+                async for event in fact_checker.run_async(ctx):
+                    yield event
 
-            # Transcript update (add safety)
-            last_resp = state.get("last_response", "[no response]")
-            last_chk  = state.get("last_checked", "[no check]")
-            state["transcript"] += f"{next_speaker}: {last_resp}\nFact check:\n{last_chk}\n\n"
+                # Transcript update (add safety)
+                last_resp = state.get("last_response", "[no response]")
+                last_chk  = state.get("last_checked", "[no check]")
+                state["transcript"] += f"{next_speaker}: {last_resp}\nFact check:\n{last_chk}\n\n"
 
-            logger.info(f"[{self.name}] Debate finished.")
+        logger.info(f"\n[{self.name}] Debate finished.")
 
 # Define the LLM agents
 moderator = LlmAgent(
     model=MODEL,
     name='Moderator',
     description='The moderator for this debate.',
-    instruction="""You are a neutral, fair debate moderator.
+    instruction="""
+You are a neutral, fair debate moderator.
 Current topic: {topic}
 
 Full transcript so far:
@@ -130,15 +132,15 @@ Latest fact-check:
 {last_checked}
 
 Rules:
-- If transcript is empty OR user says anything like "start", "begin", "go", "debate", "hello", or just presses send, introduce the topic in 2-3 sentences, then output NEXT: Pro
+- If transcript is empty OR user says anything like "start", "begin", "go", "debate", "hello", or 
+just presses send, introduce the topic in 2-3 sentences, then output NEXT: Pro
+- If you feel the debate has reached it's conclusion, either by repetitiveness, lack of new content, 
+derailed arguments, or something else, then output "END: <reason>"
 - Otherwise, evaluate the last round and decide:
   - "NEXT: Pro"
   - "NEXT: Con"
-  - "END: one short reason"
 
 Output ONLY one line: "NEXT: Pro", "NEXT: Con" or "END: <reason>"
-
-If unsure, output NEXT: Pro
 """,
     output_key="mod_decision",
     generate_content_config=types.GenerateContentConfig(
@@ -146,25 +148,49 @@ If unsure, output NEXT: Pro
     )
 )
 
-debater = LlmAgent(
-    name="Debater",
+con = LlmAgent(
+    name="Con",
     model=MODEL,
-    instruction="""You are debating as: {current_speaker}.
-If Pro: argue FOR the topic passionately and logically.
-If Con: argue AGAINST the topic passionately and logically.
+    instruction="""
+You are debating as the opposing debater.
+You argue AGAINST the topic passionately and logically.
+You present facts and statistics to back your claims.
 Topic: {topic}
 Transcript so far: {transcript}
 Opponent's last checked response: {last_checked}
 Argue clearly, logically, passionately. Keep response concise (100-150 words).
 Output only your argument, no extra commentary.""",
-    output_key="last_response"
+    output_key="last_response",
+    generate_content_config=types.GenerateContentConfig(
+        temperature=1.2
+    )
+)
+
+pro = LlmAgent(
+    name="Pro",
+    model=MODEL,
+    instruction="""
+You are debating as the supporting debater.
+You argue FOR the topic passionately and logically.
+You present facts and statistics to back your claims.
+Topic: {topic}
+Transcript so far: {transcript}
+Opponent's last checked response: {last_checked}
+Argue clearly, logically, passionately. Keep response concise (100-150 words).
+Output only your argument, no extra commentary.""",
+    output_key="last_response",
+    generate_content_config=types.GenerateContentConfig(
+        temperature=1.2
+    )
 )
 
 fact_checker = LlmAgent(
     model=MODEL,
     name='fact_checker',
     description='You fact check every single claim rigorously.',
-    instruction="""Review the LAST response only: {last_response}
+    instruction="""
+The topic of the debate: {topic}
+Review the LAST response only: {last_response}
 List every factual claim and mark as:
 ✅ Accurate
 ⚠️ Partially accurate (explain BRIEFLY)
@@ -220,7 +246,7 @@ async def run_debate():
         new_message=start_message
     ):
         if event.is_final_response() and event.content and event.content.parts:
-            print("\nFinal agent message:", event.content.parts[0].text)
+            print(event.content.parts[0].text)
         elif hasattr(event, 'type'):
             print("Error event:", event)
         else:
@@ -232,7 +258,8 @@ async def run_debate():
 root_agent = DebateAgent(
     name="DebateAgent",
     moderator=moderator,
-    debater=debater,
+    pro=pro,
+    con=con,
     fact_checker=fact_checker
 )
 
