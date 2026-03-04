@@ -1,140 +1,242 @@
-'''TO DO
-1) Add human-in-the-loop interaction before the start of each round
-2) Change endDebateTool to be cleaner
-3) Store past debates and be able to access them
-
-Optional: Add voices
-
-'''
-#from google.adk.agents.invocation_context import InvocationContext
-from google.adk.agents import LlmAgent, LoopAgent, SequentialAgent, callback_context
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+import logging
+from typing import AsyncGenerator
+from typing_extensions import override
+from dotenv import load_dotenv
+from google.adk.agents import LlmAgent, BaseAgent
+from google.adk.agents.invocation_context import InvocationContext
 from google.genai import types
-from google.adk.tools import BaseTool, FunctionTool
-from typing import Optional
+from google.adk.sessions import InMemorySessionService
+from google.adk.runners import Runner
+from google.adk.events import Event
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+load_dotenv()
 
+
+# Constants
 APP_NAME = "MultiAgentDebate"
-USER_ID = "testing"
-MODEL = 'gemini-2.5-flash'
-SESSION_ID = "debate1"
-TOPIC = "Does pineapple belong on pizza?" # CHANGE BEFORE DUE DATE
+USER_ID = "12345"
+SESSION_ID = "123344"
+MODEL = "gemini-2.5-flash"
+TOPIC = "Is AI better than human intelligence?"
 
-class endDebateTool(BaseTool):
-    description = "Call this ONLY when you are certain the debate should end now. Provide a short reason."
+# Configure Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    async def run(self, reason: str, ctx):  # ctx is passed automatically
-        ctx.event_actions.escalate = True  # This breaks the LoopAgent immediately
-        return f"Debate ended early: {reason}"
+# Custom Debate Agent
+from google.adk.agents import LlmAgent, BaseAgent
 
+class DebateAgent(BaseAgent):
+    """
+    Custom agent for a debate.
+    This agent orchestrates the debate, handling ordering and loops.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        moderator: LlmAgent,
+        debater: LlmAgent,
+        fact_checker: LlmAgent,
+    ):
+        moderator= moderator
+        debater= debater
+        fact_checker= fact_checker
+
+        super().__init__(
+            name=name,
+            sub_agents=[moderator, debater, fact_checker],
+        )
+
+    @override
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        """
+        Implements the custom debate logic.
+        """
+        logger.info(f"[{self.name}] Starting debate.")
+
+        state = ctx.session.state
+        state.setdefault("topic", TOPIC)
+        state.setdefault("transcript", "")
+        state.setdefault("last_checked", "")
+        state.setdefault("current_speaker", "Pro") # Start with pro
+
+        iterations = 0
+        max_iterations = 10
+
+        async def async_input(prompt: str) -> str:
+            loop = asyncio.get_running_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                return await loop.run_in_executor(executor, input, prompt)
+
+        flag = False
+        while iterations < max_iterations and not flag:
+            iterations += 1
+            logger.info(f"[{self.name}] -- Round {iterations} --")
+
+            # Moderator
+            logger.info(f"[{self.name}] Running Moderator...")
+            async for event in moderator.run_async(ctx):
+                yield event
+
+            mod_decision = state.get("mod_decision", "").strip()
+            logger.info(f"Moderator decided: {mod_decision!r}")
+
+            if mod_decision.upper().startswith("END:"):
+                logger.info(f"[{self.name}] Debate ended: {mod_decision}")
+                flag = True
+                continue
+
+            if not mod_decision.upper().startswith("NEXT:"):
+                logger.warning(f"Invalid decision, forcing continuation")
+                # default alternation
+                current = state.get("current_speaker", "Pro")
+                next_speaker = "Con" if current == "Pro" else "Pro"
+            else:
+                next_speaker = mod_decision.split(":", 1)[1].strip().title()
+            
+            state["current_speaker"] = next_speaker
+
+            # For adk web: always use AI for now
+            logger.info(f"[{self.name}] Running Debater as {next_speaker} (auto AI mode)")
+            async for event in debater.run_async(ctx):
+                yield event
+
+            # Fact check
+            logger.info(f"[{self.name}] Running Fact Checker...")
+            async for event in fact_checker.run_async(ctx):
+                yield event
+
+            # Transcript update (add safety)
+            last_resp = state.get("last_response", "[no response]")
+            last_chk  = state.get("last_checked", "[no check]")
+            state["transcript"] += f"{next_speaker}: {last_resp}\nFact check:\n{last_chk}\n\n"
+
+            logger.info(f"[{self.name}] Debate finished.")
+
+# Define the LLM agents
 moderator = LlmAgent(
     model=MODEL,
     name='Moderator',
     description='The moderator for this debate.',
-    instruction="""You are a strict, neutral moderator who is moderating a debate.
-    Current full transcript:{transcript}
+    instruction="""You are a neutral, fair debate moderator.
+Current topic: {topic}
 
-    Latest fact-checked round:{last_checked}
+Full transcript so far:
+{transcript}
 
-    Topic:{topic}
+Latest fact-check:
+{last_checked}
 
-    Your tasks:
-    1. Introduce the debate if the transcript is empty. Briefly (2-3 sentences) introduce the 
-    topic and then begin the debate.
-    2. Decide if the round is valid (no major off-topic/toxicity/stalling).
-    3. If the debate should continue output "NEXT: Pro" or "NEXT: Con"
-    4. If it's time to end (e.g., clear winner, both sides exhausted, enough rounds, stalemate, 
-    etc.) Call 'endDebateTool' with a 1-sentence reason.
+Rules:
+- If transcript is empty OR user says anything like "start", "begin", "go", "debate", "hello", or just presses send, introduce the topic in 2-3 sentences, then output NEXT: Pro
+- Otherwise, evaluate the last round and decide:
+  - "NEXT: Pro"
+  - "NEXT: Con"
+  - "END: one short reason"
 
-    Output your decision OR tool call — nothing else.""",
-    tools=[endDebateTool],
+Output ONLY one line: "NEXT: Pro", "NEXT: Con" or "END: <reason>"
+
+If unsure, output NEXT: Pro
+""",
     output_key="mod_decision",
     generate_content_config=types.GenerateContentConfig(
-        temperature=0.2
+        temperature=0.1
     )
 )
 
-def get_human_argument(argument: str):
-    """
-    Submits the human's response to the debate.
-    Args:
-        argument: Your actual debate argument text.
-    """
-    return argument
-
-def is_human_turn(ctx) -> bool:
-    state = ctx.session.state
-    # If mode is HUMAN and speaker is 'Con', ADK Web will pop up the input box
-    return state.get("mode") == "AI_VS_HUMAN" and state.get("current_speaker") == "Con"
-
-current_debater = LlmAgent(
-    name="Current_Debater",
+debater = LlmAgent(
+    name="Debater",
     model=MODEL,
-    instruction="""You are representing: {current_speaker}.
-    If Pro: argue FOR the topic passionately and logically.
-    If Con: argue AGAINST the topic passionately and logically.
-    Topic: {topic}
-    CRITICAL:
-    - If MODE is 'AI_VS_HUMAN' and speaker is 'Con', call 'get_human_argument'.
-    - Otherwise (AI_VS_AI mode), generate a 150-word argument for {topic}.""",
-    tools=[
-        # This parameter is the magic that triggers the ADK Web UI pause
-        FunctionTool(get_human_argument, require_confirmation=is_human_turn)
-    ],
+    instruction="""You are debating as: {current_speaker}.
+If Pro: argue FOR the topic passionately and logically.
+If Con: argue AGAINST the topic passionately and logically.
+Topic: {topic}
+Transcript so far: {transcript}
+Opponent's last checked response: {last_checked}
+Argue clearly, logically, passionately. Keep response concise (100-150 words).
+Output only your argument, no extra commentary.""",
     output_key="last_response"
 )
 
-factChecker = LlmAgent(
+fact_checker = LlmAgent(
     model=MODEL,
     name='fact_checker',
     description='You fact check every single claim rigorously.',
-    instruction="""Review the LAST response only.
-    List every factual claim and mark as:
-    - ✅ Accurate
-    - ⚠️ Partially accurate (explain BRIEFLY)
-    - ❌ False (correct it with source if possible)
-    Give an overall accuracy score 1-10.
-    Output in clear bullet format.""",
+    instruction="""Review the LAST response only: {last_response}
+List every factual claim and mark as:
+✅ Accurate
+⚠️ Partially accurate (explain BRIEFLY)
+❌ False (correct it with source if possible)
+Give an overall accuracy score 1-10.
+Output in clear bullet format.""",
     output_key="last_checked",
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2
     )
 )
 
-debate_round= SequentialAgent(
-    name="Debate_Round",
-    sub_agents=[moderator, current_debater, factChecker]
-)
+INITIAL_STATE = {"topic": TOPIC}
 
-root_agent = LoopAgent(
-    name='debate_loop',
-    max_iterations=10,
-    description='Loops through alternating debate rounds.',
-    sub_agents=[debate_round] # Start with the pro round
-)
-
-def ensure_defaults(callback_context: callback_context.CallbackContext) -> Optional[types.Content]:
-    state = callback_context.state
-    state.setdefault("topic", TOPIC)
-    state.setdefault("current_speaker", "") 
-    state.setdefault("transcript", "")
-    state.setdefault("mode", "AI_VS_HUMAN") 
-    state.setdefault("last_response", "")
-    state.setdefault("last_checked", "")
-    state.setdefault("moderator_decision", "")
-
-root_agent.before_agent_callback = ensure_defaults
-
-async def debate():
-    service = InMemorySessionService()
-
-    runner = Runner(agent=root_agent, session_service=service)
-    message = types.Content(
-        role= "user",
-        parts=[types.Part.from_text(text="Begin the debate now.")]
+# Setup Runner and Session
+async def setup_session_and_runner():
+    session_service = InMemorySessionService()
+    session = await session_service.create_session(
+        app_name=APP_NAME, 
+        user_id=USER_ID, 
+        session_id=SESSION_ID, 
+        state=INITIAL_STATE.copy(),
     )
-    runner.run(user_id="user1", session_id="debate1", new_message=message)
+    logger.info(f"Initial session state: {session.state}")
+    runner = Runner(
+        agent=root_agent,
+        app_name=APP_NAME,
+        session_service=session_service
+    )
+    return session_service, runner
 
+# Function to Interact with the Agent
+async def run_debate():
+    session_service, runner = await setup_session_and_runner()
+    session = session_service.sessions[APP_NAME][USER_ID][SESSION_ID]
+    session.state["topic"] = TOPIC
+
+    print(f"\nStarting debate on: {TOPIC}\n")
+
+    # Required: give the agent something to react to
+    start_message = types.Content(
+        role="user",
+        parts=[
+            types.Part(
+                text="Start the debate on the topic in state now."
+            )
+        ]
+    )
+
+    async for event in runner.run_async(
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+        new_message=start_message
+    ):
+        if event.is_final_response() and event.content and event.content.parts:
+            print("\nFinal agent message:", event.content.parts[0].text)
+        elif hasattr(event, 'type'):
+            print("Error event:", event)
+        else:
+            print("Event:", event)  # debug all events
+
+    print("\nFinished.")
+    
+# Create the custom agent instance
+root_agent = DebateAgent(
+    name="DebateAgent",
+    moderator=moderator,
+    debater=debater,
+    fact_checker=fact_checker
+)
+
+# For standalone script
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(debate())
+    asyncio.run(run_debate())
