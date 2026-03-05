@@ -35,9 +35,9 @@ APP_NAME = "MultiAgentDebate"
 USER_ID = "12345"
 SESSION_ID = "123344"
 MODEL = "gemini-2.5-flash"
-TOPIC = "Is AI better than human intelligence?"
+TOPIC = "Is the war with Iran worth it?"
 PRO = "ON"
-CON = 'OFF'
+CON = 'ON'
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
@@ -96,34 +96,12 @@ class DebateAgent(BaseAgent):
             name=name,
             sub_agents=[moderator, pro, con, fact_checker],
         )
-
-    @override
+        
+        
     @override
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         """
-        Implements the core debate orchestration logic.
-        
-        This method manages the complete debate flow:
-        1. Initializes or retrieves debate state from the session
-        2. Runs the moderator to determine the next speaker
-        3. Executes the appropriate debater (Pro or Con)
-        4. Runs fact-checking on the response
-        5. Updates the debate transcript
-        6. Handles human input pauses when in human-vs-AI mode
-        7. Continues until debate conclusion or max iterations
-        
-        The method supports pausing execution when waiting for human input,
-        allowing the debate to resume when the human provides their argument
-        through the Web UI.
-        
-        Args:
-            ctx (InvocationContext): The invocation context containing session state
-            
-        Yields:
-            Event: Events from sub-agents as they execute
-            
-        Returns:
-            None: When the debate completes or pauses for human input
+        Implements the core debate orchestration logic with human fact-checking.
         """
         logger.info(f"[{self.name}] Starting debate.")
 
@@ -170,51 +148,49 @@ class DebateAgent(BaseAgent):
             state["current_speaker"] = next_speaker
             logger.info(f"[{self.name}] Next speaker: {next_speaker}")
 
-            # 3. Run the debater (AI or human)
+            # 3. Run the debater (AI or human) with proper human-vs-AI handling
             human_paused = False
 
-            if next_speaker == "Pro":
-                if state.get("pro_on", "ON").upper() == "ON":
-                    async for event in pro.run_async(ctx):
-                        if event.content and event.content.parts:
-                            state["last_response"] = event.content.parts[0].text
-                        yield event
-                else:
-                    # Wait for human Pro to provide input in Web UI
-                    if not state.get("last_response"):
-                        logger.info("Waiting for human Pro input in Web UI...")
-                        human_paused = True
+            is_human = (next_speaker == "Pro" and state.get("pro_on", "OFF").upper() == "OFF") or \
+                       (next_speaker == "Con" and state.get("con_on", "OFF").upper() == "OFF")
 
-            elif next_speaker == "Con":
-                if state.get("con_on", "ON").upper() == "ON":
-                    async for event in con.run_async(ctx):
-                        if event.content and event.content.parts:
-                            state["last_response"] = event.content.parts[0].text
-                        yield event
-                else:
-                    # Wait for human Con to provide input in Web UI
-                    if not state.get("last_response"):
-                        logger.info("Waiting for human Con input in Web UI...")
-                        human_paused = True
+            if is_human:
+                # Pause if human has not yet provided input
+                if not state.get("last_response"):
+                    logger.info(f"[{self.name}] Waiting for human {next_speaker} input in Web UI...")
+                    human_paused = True
+            else:
+                # Run AI agent
+                agent = pro if next_speaker == "Pro" else con
+                async for event in agent.run_async(ctx):
+                    if event.content and event.content.parts:
+                        state["last_response"] = event.content.parts[0].text
+                    yield event
 
             if human_paused:
-                return  # exit; next invocation will resume after human input
+                return  # pause until human input
 
-            # 4. Run fact checker on last_response (AI or human)
+            # 4. Run fact checker on last_response (human or AI)
             logger.info(f"[{self.name}] Running Fact Checker on last response...")
+            # Mark whether the input was from human or AI for clarity
+            state["last_response_to_check"] = ("[Human input] " if is_human else "[AI input] ") + state.get("last_response", "")
+
             async for event in fact_checker.run_async(ctx):
                 if event.content and event.content.parts:
                     state["last_checked"] = event.content.parts[0].text
                 yield event
 
             # 5. Update transcript safely
-            state["transcript"] += f"{next_speaker}: {state.get('last_response', 
-                '[no response]')}\nFact check:\n{state.get('last_checked', '[no check]')}\n\n"
+            state["transcript"] += f"{next_speaker}: {state.get('last_response', '[no response]')}\n" \
+                                   f"Fact check:\n{state.get('last_checked', '[no check]')}\n\n"
 
-            # 6. Clear last_response for next human input
+            # 6. Clear last_response for next round
             state["last_response"] = ""
 
         logger.info(f"\n[{self.name}] Debate finished.")
+        
+        
+        
 
 # Define the LLM agents
 moderator = LlmAgent(
