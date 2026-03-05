@@ -1,4 +1,3 @@
-import logging
 from typing import AsyncGenerator
 from typing_extensions import override
 from dotenv import load_dotenv
@@ -18,10 +17,6 @@ USER_ID = "12345"
 SESSION_ID = "123344"
 MODEL = "gemini-2.5-flash"
 TOPIC = "Is AI better than human intelligence?"
-
-# Configure Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Custom Debate Agent
 from google.adk.agents import LlmAgent, BaseAgent
@@ -55,13 +50,13 @@ class DebateAgent(BaseAgent):
         """
         Implements the custom debate logic.
         """
-        logger.info(f"[{self.name}] Starting debate.")
+        print(f"[{self.name}] Starting debate.")
 
         state = ctx.session.state
         state.setdefault("topic", TOPIC)
         state.setdefault("transcript", "")
         state.setdefault("last_checked", "")
-        state.setdefault("current_speaker", "Pro") # Start with pro
+        state.setdefault("current_speaker", "")
 
         iterations = 0
         max_iterations = 10
@@ -72,40 +67,39 @@ class DebateAgent(BaseAgent):
                 return await loop.run_in_executor(executor, input, prompt)
 
         flag = False
+        round = 1
         while iterations < max_iterations and not flag:
             iterations += 1
-            logger.info(f"\n\n[{self.name}] --- Round {iterations} ---")
+            round = iterations/2 if iterations % 2 == 0 else round
+            if iterations % 2 == 1:
+                print(f"\n[{self.name}] --- Round {iterations} ---\n")
 
             # Moderator
-            logger.info(f"[{self.name}] Running Moderator...")
+            print(f"[{self.name}] Running Moderator...")
             async for event in moderator.run_async(ctx):
                 yield event
 
             mod_decision = state.get("mod_decision", "").strip()
-            print(f"Moderator: {mod_decision!r}")
-
             if mod_decision.upper().startswith("END:"):
-                logger.info(f"[{self.name}] Debate ended: {mod_decision}")
                 flag = True
 
             if flag == False:
                 if iterations > 1 and not mod_decision.upper().startswith("NEXT:"):
                     # default alternation
-                    current = state.get("current_speaker", "Pro")
-                    next_speaker = "Con" if current == "Pro" else "Pro"
+                    next_speaker = "Con" if state["current_speaker"] == "Pro" else "Pro"
                 else:
-                    next_speaker = mod_decision.split(":", 1)[1].strip().title()
+                    next_speaker = mod_decision.split("NEXT:", 1)[1].strip()
                 
                 state["current_speaker"] = next_speaker
 
                 # Run debater
-                logger.info(f"[{self.name}] Running Debater as {next_speaker}")
-                debater = pro if {next_speaker}  == "Pro" else con
+                print(f"\n[{self.name}] Running {next_speaker}...")
+                debater = con if next_speaker  == "Con" else pro
                 async for event in debater.run_async(ctx):
                     yield event
 
                 # Fact check
-                logger.info(f"[{self.name}] Running Fact Checker...")
+                print(f"\n[{self.name}] Running Fact Checker...")
                 async for event in fact_checker.run_async(ctx):
                     yield event
 
@@ -114,7 +108,9 @@ class DebateAgent(BaseAgent):
                 last_chk  = state.get("last_checked", "[no check]")
                 state["transcript"] += f"{next_speaker}: {last_resp}\nFact check:\n{last_chk}\n\n"
 
-        logger.info(f"\n[{self.name}] Debate finished.")
+                print("\n")
+
+        print(f"\n[{self.name}] Debate finished.")
 
 # Define the LLM agents
 moderator = LlmAgent(
@@ -141,6 +137,7 @@ derailed arguments, or something else, then output "END: <reason>"
   - "NEXT: Con"
 
 Output ONLY one line: "NEXT: Pro", "NEXT: Con" or "END: <reason>"
+At the beginning of all of your responses, output "[Moderator]: <message>"
 """,
     output_key="mod_decision",
     generate_content_config=types.GenerateContentConfig(
@@ -155,11 +152,13 @@ con = LlmAgent(
 You are debating as the opposing debater.
 You argue AGAINST the topic passionately and logically.
 You present facts and statistics to back your claims.
+No matter what the topic is, you oppose it completely.
 Topic: {topic}
 Transcript so far: {transcript}
 Opponent's last checked response: {last_checked}
 Argue clearly, logically, passionately. Keep response concise (100-150 words).
-Output only your argument, no extra commentary.""",
+At the beginning of all of your responses, output "[Con]: <argument>"
+""",
     output_key="last_response",
     generate_content_config=types.GenerateContentConfig(
         temperature=1.2
@@ -173,11 +172,13 @@ pro = LlmAgent(
 You are debating as the supporting debater.
 You argue FOR the topic passionately and logically.
 You present facts and statistics to back your claims.
+No matter what the topic is, you support it completely.
 Topic: {topic}
 Transcript so far: {transcript}
 Opponent's last checked response: {last_checked}
 Argue clearly, logically, passionately. Keep response concise (100-150 words).
-Output only your argument, no extra commentary.""",
+At the beginning of all of your responses, output "[Pro]: <argument>"
+""",
     output_key="last_response",
     generate_content_config=types.GenerateContentConfig(
         temperature=1.2
@@ -196,7 +197,11 @@ List every factual claim and mark as:
 ⚠️ Partially accurate (explain BRIEFLY)
 ❌ False (correct it with source if possible)
 Give an overall accuracy score 1-10.
-Output in clear bullet format.""",
+Output in clear bullet format.
+Do not exceed 150 words in your output.
+Be concise but strict.
+At the beginning of all of your responses, output "[Fact Checker]: <message>"
+""",
     output_key="last_checked",
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2
@@ -214,7 +219,6 @@ async def setup_session_and_runner():
         session_id=SESSION_ID, 
         state=INITIAL_STATE.copy(),
     )
-    logger.info(f"Initial session state: {session.state}")
     runner = Runner(
         agent=root_agent,
         app_name=APP_NAME,
