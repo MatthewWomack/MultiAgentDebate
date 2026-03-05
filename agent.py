@@ -36,12 +36,9 @@ USER_ID = "12345"
 SESSION_ID = "123344"
 MODEL = "gemini-2.5-flash"
 TOPIC = "Is the war with Iran worth it?"
-PRO = "ON"
-CON = 'ON'
+PRO = "ON"  #Flag for pro AI 
+CON = 'OFF'  #Flag for con AI 
 
-# Configure Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Custom Debate Agent
 from google.adk.agents import LlmAgent, BaseAgent
@@ -103,7 +100,6 @@ class DebateAgent(BaseAgent):
         """
         Implements the core debate orchestration logic with human fact-checking.
         """
-        logger.info(f"[{self.name}] Starting debate.")
 
         state = ctx.session.state
         state.setdefault("topic", TOPIC)
@@ -111,7 +107,7 @@ class DebateAgent(BaseAgent):
         state.setdefault("last_checked", "")
         state.setdefault("last_response", "")
         state.setdefault("current_speaker", "Pro")
-        state.setdefault("pro_on", PRO)
+        state.setdefault("pro_on", PRO) #sets Ai to on
         state.setdefault("con_on", CON)
 
         iterations = 0
@@ -120,10 +116,8 @@ class DebateAgent(BaseAgent):
 
         while iterations < max_iterations and not flag:
             iterations += 1
-            logger.info(f"\n\n[{self.name}] --- Round {iterations} ---")
 
             # 1. Moderator decides who speaks next
-            logger.info(f"[{self.name}] Running Moderator...")
             async for event in moderator.run_async(ctx):
                 yield event
 
@@ -131,11 +125,9 @@ class DebateAgent(BaseAgent):
             print(f"Moderator: {mod_decision!r}")
 
             if mod_decision.upper().startswith("END:"):
-                logger.info(f"[{self.name}] Debate ended: {mod_decision}")
                 flag = True
                 break
 
-            # 2. Determine next speaker
             if iterations > 1 and not mod_decision.upper().startswith("NEXT:"):
                 current = state.get("current_speaker", "Pro")
                 next_speaker = "Con" if current == "Pro" else "Pro"
@@ -146,21 +138,17 @@ class DebateAgent(BaseAgent):
                     next_speaker = "Pro"
 
             state["current_speaker"] = next_speaker
-            logger.info(f"[{self.name}] Next speaker: {next_speaker}")
 
-            # 3. Run the debater (AI or human) with proper human-vs-AI handling
             human_paused = False
 
+            # This logic to see if there is a human debator or not
             is_human = (next_speaker == "Pro" and state.get("pro_on", "OFF").upper() == "OFF") or \
                        (next_speaker == "Con" and state.get("con_on", "OFF").upper() == "OFF")
 
             if is_human:
-                # Pause if human has not yet provided input
                 if not state.get("last_response"):
-                    logger.info(f"[{self.name}] Waiting for human {next_speaker} input in Web UI...")
                     human_paused = True
             else:
-                # Run AI agent
                 agent = pro if next_speaker == "Pro" else con
                 async for event in agent.run_async(ctx):
                     if event.content and event.content.parts:
@@ -170,24 +158,19 @@ class DebateAgent(BaseAgent):
             if human_paused:
                 return  # pause until human input
 
-            # 4. Run fact checker on last_response (human or AI)
-            logger.info(f"[{self.name}] Running Fact Checker on last response...")
-            # Mark whether the input was from human or AI for clarity
-            state["last_response_to_check"] = ("[Human input] " if is_human else "[AI input] ") + state.get("last_response", "")
+            #
+            state["last_response"] =  state.get("last_response", "")
 
             async for event in fact_checker.run_async(ctx):
                 if event.content and event.content.parts:
                     state["last_checked"] = event.content.parts[0].text
                 yield event
 
-            # 5. Update transcript safely
             state["transcript"] += f"{next_speaker}: {state.get('last_response', '[no response]')}\n" \
                                    f"Fact check:\n{state.get('last_checked', '[no check]')}\n\n"
 
-            # 6. Clear last_response for next round
             state["last_response"] = ""
 
-        logger.info(f"\n[{self.name}] Debate finished.")
         
         
         
@@ -220,13 +203,11 @@ moderator = LlmAgent(
         Maintain a structured debate and decide who speaks next.
 
         Rules:
-
         1. If the transcript is empty OR the user says things like
         "start", "begin", "go", "debate", "hello", or sends an empty message,
         briefly introduce the topic in 1–2 sentences and then output:
 
         NEXT: Pro
-
         2. After each round:
         - Review the last argument
         - Consider the fact-check results
@@ -302,14 +283,14 @@ fact_checker = LlmAgent(
     name='fact_checker',
     description='You fact check every single claim rigorously.',
     instruction="""
-The topic of the debate: {topic}
-Review the LAST response only: {last_response}
-List every factual claim and mark as:
-✅ Accurate
-⚠️ Partially accurate (explain BRIEFLY)
-❌ False (correct it with source if possible)
-Give an overall accuracy score 1-10.
-Output in clear bullet format.""",
+        The topic of the debate: {topic}
+        Review the LAST response only: {last_response}
+        List every factual claim and mark as:
+        ✅ Accurate
+        ⚠️ Partially accurate (explain BRIEFLY)
+        ❌ False (correct it with source if possible)
+        Give an overall accuracy score 1-10.
+        Output in clear bullet format.""",
     output_key="last_checked",
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2
@@ -331,9 +312,6 @@ async def setup_session_and_runner():
             - session_service (InMemorySessionService): The configured session service
             - runner (Runner): The configured runner for executing the debate agent
             
-    Example:
-        >>> session_service, runner = await setup_session_and_runner()
-        >>> # Use the runner to start the debate
     """
     session_service = InMemorySessionService()
     session = await session_service.create_session(
@@ -342,7 +320,6 @@ async def setup_session_and_runner():
         session_id=SESSION_ID, 
         state=INITIAL_STATE.copy(),
     )
-    logger.info(f"Initial session state: {session.state}")
     runner = Runner(
         agent=root_agent,
         app_name=APP_NAME,
@@ -372,11 +349,6 @@ async def run_debate():
     Raises:
         Various exceptions from the underlying ADK framework may be propagated
         
-    Example:
-        >>> asyncio.run(run_debate())
-        Starting debate on: Is AI better than human intelligence?
-        [Debate output streams here...]
-        Finished.
     """
     session_service, runner = await setup_session_and_runner()
     session = session_service.sessions[APP_NAME][USER_ID][SESSION_ID]
