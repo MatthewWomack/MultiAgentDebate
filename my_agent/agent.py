@@ -33,10 +33,6 @@ TOPIC = "Does AI negatively affect human intelligence and creativity?"
 PRO = "ON"
 CON = 'ON'
 
-# Custom Debate Agent
-from google.adk.agents import LlmAgent, BaseAgent
-
-
 class DebateAgent(BaseAgent):
     """
     Custom agent for orchestrating a structured debate between two opposing sides.
@@ -179,13 +175,14 @@ class DebateAgent(BaseAgent):
             if is_human:
                 if not state.get("last_response"):
                     human_paused = True
+"""
             else:
                 agent = pro if next_speaker == "Pro" else con
                 async for event in agent.run_async(ctx):
                     if event.content and event.content.parts:
                         state["last_response"] = event.content.parts[0].text
                     yield event
-
+"""
             if human_paused:
                 return  # exit; next invocation will resume after human input
 
