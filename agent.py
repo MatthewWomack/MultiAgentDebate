@@ -17,7 +17,6 @@ DESCRIPTION:
 Date: 3/5/2026
 """
 
-import logging
 from typing import AsyncGenerator
 from typing_extensions import override
 from dotenv import load_dotenv
@@ -35,10 +34,12 @@ APP_NAME = "MultiAgentDebate"
 USER_ID = "12345"
 SESSION_ID = "123344"
 MODEL = "gemini-2.5-flash"
+TOPIC = "Is AI better than human intelligence?"
 TOPIC = "Is the war with Iran worth it?"
-PRO = "ON"  #Flag for pro AI 
-CON = 'OFF'  #Flag for con AI 
+PRO = "ON"
+CON = 'OFF'
 
+# Configure Logging
 
 # Custom Debate Agent
 from google.adk.agents import LlmAgent, BaseAgent
@@ -93,11 +94,36 @@ class DebateAgent(BaseAgent):
             name=name,
             sub_agents=[moderator, pro, con, fact_checker],
         )
+
+    @override
         
         
     @override
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         """
+        Implements the core debate orchestration logic.
+        
+        This method manages the complete debate flow:
+        1. Initializes or retrieves debate state from the session
+        2. Runs the moderator to determine the next speaker
+        3. Executes the appropriate debater (Pro or Con)
+        4. Runs fact-checking on the response
+        5. Updates the debate transcript
+        6. Handles human input pauses when in human-vs-AI mode
+        7. Continues until debate conclusion or max iterations
+        
+        The method supports pausing execution when waiting for human input,
+        allowing the debate to resume when the human provides their argument
+        through the Web UI.
+        
+        Args:
+            ctx (InvocationContext): The invocation context containing session state
+            
+        Yields:
+            Event: Events from sub-agents as they execute
+            
+        Returns:
+            None: When the debate completes or pauses for human input
         Implements the core debate orchestration logic with human fact-checking.
         """
 
@@ -107,7 +133,7 @@ class DebateAgent(BaseAgent):
         state.setdefault("last_checked", "")
         state.setdefault("last_response", "")
         state.setdefault("current_speaker", "Pro")
-        state.setdefault("pro_on", PRO) #sets Ai to on
+        state.setdefault("pro_on", PRO)
         state.setdefault("con_on", CON)
 
         iterations = 0
@@ -117,7 +143,6 @@ class DebateAgent(BaseAgent):
         while iterations < max_iterations and not flag:
             iterations += 1
 
-            # 1. Moderator decides who speaks next
             async for event in moderator.run_async(ctx):
                 yield event
 
@@ -141,7 +166,25 @@ class DebateAgent(BaseAgent):
 
             human_paused = False
 
-            # This logic to see if there is a human debator or not
+            if next_speaker == "Pro":
+                if state.get("pro_on", "ON").upper() == "ON":
+                    async for event in pro.run_async(ctx):
+                        if event.content and event.content.parts:
+                            state["last_response"] = event.content.parts[0].text
+                        yield event
+                else:
+                    if not state.get("last_response"):
+                        human_paused = True
+
+            elif next_speaker == "Con":
+                if state.get("con_on", "ON").upper() == "ON":
+                    async for event in con.run_async(ctx):
+                        if event.content and event.content.parts:
+                            state["last_response"] = event.content.parts[0].text
+                        yield event
+                else:
+                    if not state.get("last_response"):
+                        human_paused = True
             is_human = (next_speaker == "Pro" and state.get("pro_on", "OFF").upper() == "OFF") or \
                        (next_speaker == "Con" and state.get("con_on", "OFF").upper() == "OFF")
 
@@ -156,24 +199,26 @@ class DebateAgent(BaseAgent):
                     yield event
 
             if human_paused:
-                return  # pause until human input
+                state["last_response"] = event.content.parts[0].text
+                return  # exit; next invocation will resume after human input
 
-            #
-            state["last_response"] =  state.get("last_response", "")
+        
+            state["last_response"] = ("[Human input] " if is_human else "[AI input] ") + state.get("last_response", "")
 
             async for event in fact_checker.run_async(ctx):
                 if event.content and event.content.parts:
                     state["last_checked"] = event.content.parts[0].text
                 yield event
 
+            # 5. Update transcript safely
+            state["transcript"] += f"{next_speaker}: {state.get('last_response', 
+                '[no response]')}\nFact check:\n{state.get('last_checked', '[no check]')}\n\n"
             state["transcript"] += f"{next_speaker}: {state.get('last_response', '[no response]')}\n" \
                                    f"Fact check:\n{state.get('last_checked', '[no check]')}\n\n"
 
+           
+            # 6. Clear last_response for next round
             state["last_response"] = ""
-
-        
-        
-        
 
 # Define the LLM agents
 moderator = LlmAgent(
@@ -203,11 +248,13 @@ moderator = LlmAgent(
         Maintain a structured debate and decide who speaks next.
 
         Rules:
+
         1. If the transcript is empty OR the user says things like
         "start", "begin", "go", "debate", "hello", or sends an empty message,
         briefly introduce the topic in 1–2 sentences and then output:
 
         NEXT: Pro
+
         2. After each round:
         - Review the last argument
         - Consider the fact-check results
@@ -283,14 +330,14 @@ fact_checker = LlmAgent(
     name='fact_checker',
     description='You fact check every single claim rigorously.',
     instruction="""
-        The topic of the debate: {topic}
-        Review the LAST response only: {last_response}
-        List every factual claim and mark as:
-        ✅ Accurate
-        ⚠️ Partially accurate (explain BRIEFLY)
-        ❌ False (correct it with source if possible)
-        Give an overall accuracy score 1-10.
-        Output in clear bullet format.""",
+The topic of the debate: {topic}
+Review the LAST response only: {last_response}
+List every factual claim and mark as:
+✅ Accurate
+⚠️ Partially accurate (explain BRIEFLY)
+❌ False (correct it with source if possible)
+Give an overall accuracy score 1-10.
+Output in clear bullet format.""",
     output_key="last_checked",
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2
@@ -312,6 +359,9 @@ async def setup_session_and_runner():
             - session_service (InMemorySessionService): The configured session service
             - runner (Runner): The configured runner for executing the debate agent
             
+    Example:
+        >>> session_service, runner = await setup_session_and_runner()
+        >>> # Use the runner to start the debate
     """
     session_service = InMemorySessionService()
     session = await session_service.create_session(
@@ -349,6 +399,11 @@ async def run_debate():
     Raises:
         Various exceptions from the underlying ADK framework may be propagated
         
+    Example:
+        >>> asyncio.run(run_debate())
+        Starting debate on: Is AI better than human intelligence?
+        [Debate output streams here...]
+        Finished.
     """
     session_service, runner = await setup_session_and_runner()
     session = session_service.sessions[APP_NAME][USER_ID][SESSION_ID]
@@ -392,4 +447,3 @@ root_agent = DebateAgent(
 # For standalone script
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(run_debate())
