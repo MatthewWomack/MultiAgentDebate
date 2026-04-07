@@ -27,4 +27,13 @@ The LoopAgent has a default stopping point of 5 complete rounds for each debater
 
 The moderator can stop the debate early if it feels that a sufficient end has been reached.
 
-If the user wishes to stop it, then oh well.
+If the user wishes to stop the debate, simply type 'stop' and the moderator should end the debate.
+
+## Manually Debate the Agents
+
+If the user wishes to manually debate one of the agents, then simply change one of the following constants to 'OFF'
+```
+PRO = 'ON'
+CON = 'ON'
+```
+Whichever side is chosen, when it is that debater's turn, it will wait for user input and continue with the rest of the debate as if the user's response was the output from an agent. The user's response is not checked by the fact-checker.

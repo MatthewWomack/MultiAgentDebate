@@ -29,13 +29,9 @@ APP_NAME = "MultiAgentDebate"
 USER_ID = "12345"
 SESSION_ID = "123344"
 MODEL = "gemini-2.5-flash"
-TOPIC = "Does AI negatively affect human intelligence and creativity?"
-PRO = "ON"
+TOPIC = "Is a T-rex the ancestor of a chicken?"
+PRO = 'ON'
 CON = 'ON'
-
-# Custom Debate Agent
-from google.adk.agents import LlmAgent, BaseAgent
-
 
 class DebateAgent(BaseAgent):
     """
@@ -179,13 +175,14 @@ class DebateAgent(BaseAgent):
             if is_human:
                 if not state.get("last_response"):
                     human_paused = True
+            """
             else:
                 agent = pro if next_speaker == "Pro" else con
                 async for event in agent.run_async(ctx):
                     if event.content and event.content.parts:
                         state["last_response"] = event.content.parts[0].text
                     yield event
-
+            """
             if human_paused:
                 return  # exit; next invocation will resume after human input
 
@@ -264,7 +261,7 @@ moderator = LlmAgent(
         """,
     output_key="mod_decision",
     generate_content_config=types.GenerateContentConfig(
-        temperature=0.1
+        temperature=0
     )
 )
 
@@ -279,7 +276,7 @@ con = LlmAgent(
             You are debating as the opposing debater.
             You argue AGAINST the topic passionately and logically.
             You present facts and statistics to back your claims.
-            Argue clearly, logically, passionately. Keep response concise (100-150 words).
+            Argue clearly, logically, passionately. Keep response concise (50 words).
             Output only your argument, no extra commentary.
         If it is not on let the user write the Con argument.
         """,
@@ -300,7 +297,7 @@ pro = LlmAgent(
             You are debating as the supporting debater.
             You argue FOR the topic passionately and logically.
             You present facts and statistics to back your claims.
-            Argue clearly, logically, passionately. Keep response concise (100-150 words).
+            Argue clearly, logically, passionately. Keep response concise (50 words).
             Output only your argument, no extra commentary.
         if it is not on let the user type the argument""",
     output_key="last_response",
@@ -324,7 +321,7 @@ fact_checker = LlmAgent(
         Output in clear bullet format.""",
     output_key="last_checked",
     generate_content_config=types.GenerateContentConfig(
-        temperature=0.2
+        temperature=0
     )
 )
 
